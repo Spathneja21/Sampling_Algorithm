@@ -1,0 +1,564 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RRT* Explorer — watch the tree rewire itself toward optimal</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#EDF1F5;
+    --panel-bg:#FFFFFF;
+    --grid-line:#CBD8E3;
+    --text-primary:#152230;
+    --text-secondary:#5A6E80;
+    --border:#CBD8E3;
+    --accent-cyan:#1E9E8F;
+    --accent-cyan-soft:rgba(30,158,143,0.16);
+    --accent-amber:#C97A2E;
+    --accent-red:#C0435A;
+    --accent-gold:#B8860B;
+    --accent-violet:#7C5CBF;
+    --accent-violet-soft:rgba(124,92,191,0.15);
+    --node-fill:#152230;
+    --shadow: 0 1px 2px rgba(21,34,48,0.06);
+  }
+  :root:not([data-theme="light"]){
+    @media (prefers-color-scheme: dark){
+      --bg:#0E141B; --panel-bg:#141C26; --grid-line:#1C2732;
+      --text-primary:#E7EDF3; --text-secondary:#8CA0B3; --border:#26333F;
+      --accent-cyan:#59D6C8; --accent-cyan-soft:rgba(89,214,200,0.14);
+      --accent-amber:#F2A65A; --accent-red:#E2596B; --accent-gold:#F2C94C;
+      --accent-violet:#B79CF2; --accent-violet-soft:rgba(183,156,242,0.16);
+      --node-fill:#E7EDF3; --shadow: 0 1px 2px rgba(0,0,0,0.4);
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#0E141B; --panel-bg:#141C26; --grid-line:#1C2732;
+    --text-primary:#E7EDF3; --text-secondary:#8CA0B3; --border:#26333F;
+    --accent-cyan:#59D6C8; --accent-cyan-soft:rgba(89,214,200,0.14);
+    --accent-amber:#F2A65A; --accent-red:#E2596B; --accent-gold:#F2C94C;
+    --accent-violet:#B79CF2; --accent-violet-soft:rgba(183,156,242,0.16);
+    --node-fill:#E7EDF3; --shadow: 0 1px 2px rgba(0,0,0,0.4);
+  }
+
+  *{ box-sizing:border-box; }
+  html,body{ margin:0; padding:0; background:var(--bg); color:var(--text-primary);
+    font-family:'Space Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; -webkit-font-smoothing:antialiased; }
+  .mono{ font-family:'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+  .wrap{ max-width:1180px; margin:0 auto; padding:28px 20px 60px; }
+
+  header{ display:flex; align-items:baseline; justify-content:space-between; gap:16px; flex-wrap:wrap;
+    margin-bottom:20px; padding-bottom:16px; border-bottom:1px solid var(--border); }
+  h1{ font-size:1.5rem; font-weight:600; margin:0; letter-spacing:-0.01em; }
+  header p{ margin:4px 0 0; color:var(--text-secondary); font-size:0.92rem; max-width:48ch; }
+  .iter-readout{ font-family:'IBM Plex Mono', monospace; font-size:0.82rem; color:var(--text-secondary); text-align:right; line-height:1.6; }
+  .iter-readout b{ color:var(--text-primary); font-weight:600; }
+  .cost-highlight{ color:var(--accent-gold) !important; }
+
+  .layout{ display:grid; grid-template-columns:minmax(0,1fr) 300px; gap:20px; align-items:start; }
+  @media (max-width:880px){ .layout{ grid-template-columns:1fr; } }
+
+  .canvas-panel{ background:var(--panel-bg); border:1px solid var(--border); border-radius:4px; padding:12px; box-shadow:var(--shadow); }
+  canvas{ display:block; width:100%; height:auto; border-radius:2px; cursor:crosshair; touch-action:none; }
+  .canvas-hint{ margin:10px 2px 0; font-size:0.78rem; color:var(--text-secondary); }
+
+  .side{ display:flex; flex-direction:column; gap:14px; }
+  .panel{ background:var(--panel-bg); border:1px solid var(--border); border-radius:4px; padding:14px 16px; box-shadow:var(--shadow); }
+  .panel h2{ font-size:0.72rem; text-transform:uppercase; letter-spacing:0.06em; color:var(--text-secondary); margin:0 0 10px; font-weight:600; }
+
+  .phase-name{ font-size:1.05rem; font-weight:600; margin:0 0 6px; }
+  .phase-desc{ font-size:0.88rem; color:var(--text-secondary); line-height:1.5; margin:0; min-height:3.6em; }
+
+  .pseudocode{ display:flex; flex-direction:column; gap:2px; font-size:0.77rem; line-height:1.6; }
+  .pseudocode div{ padding:2px 6px; border-radius:3px; white-space:pre; color:var(--text-secondary); transition:background 0.15s ease, color 0.15s ease; }
+  .pseudocode div.active{ background:var(--accent-cyan-soft); color:var(--text-primary); }
+  .pseudocode div.active.reject{ background:rgba(194,67,90,0.14); color:var(--accent-red); }
+  .pseudocode div.active.rewire{ background:var(--accent-violet-soft); color:var(--accent-violet); }
+
+  .btn-row{ display:flex; flex-wrap:wrap; gap:8px; }
+  button{ font-family:inherit; font-size:0.82rem; font-weight:500; padding:7px 12px; border-radius:3px;
+    border:1px solid var(--border); background:transparent; color:var(--text-primary); cursor:pointer;
+    transition:background 0.12s ease, border-color 0.12s ease; }
+  button:hover{ border-color:var(--accent-cyan); }
+  button:focus-visible{ outline:2px solid var(--accent-cyan); outline-offset:2px; }
+  button.primary{ background:var(--accent-cyan); border-color:var(--accent-cyan); color:#08201C; }
+  button.primary:hover{ filter:brightness(1.06); }
+  button.active-mode{ border-color:var(--accent-amber); color:var(--accent-amber); }
+
+  .field{ display:flex; align-items:center; justify-content:space-between; gap:10px; font-size:0.82rem; color:var(--text-secondary); margin-top:10px; }
+  .field label{ display:flex; align-items:center; gap:8px; }
+  input[type="range"]{ width:100px; accent-color:var(--accent-cyan); }
+  input[type="checkbox"]{ accent-color:var(--accent-cyan); }
+
+  .legend{ display:grid; grid-template-columns:1fr 1fr; gap:8px 12px; font-size:0.78rem; color:var(--text-secondary); }
+  .legend-item{ display:flex; align-items:center; gap:7px; }
+  .swatch{ width:10px; height:10px; border-radius:50%; flex-shrink:0; }
+  .swatch.ring{ background:transparent; border:1.6px solid; }
+
+  .note{ font-size:0.8rem; color:var(--text-secondary); line-height:1.55; margin-top:10px; padding-top:10px; border-top:1px solid var(--border); }
+
+  @media (prefers-reduced-motion: reduce){ * { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div>
+      <h1>RRT* Explorer</h1>
+      <p>Same tree-growing loop as RRT, plus two extra steps: pick the cheapest parent, then rewire nearby nodes if the new one gives them a shortcut. Watch the path cost fall over time.</p>
+    </div>
+    <div class="iter-readout">
+      iteration <b id="statIter">0</b><br>
+      nodes <b id="statNodes">1</b><br>
+      best path cost <b id="statCost" class="cost-highlight">—</b>
+    </div>
+  </header>
+
+  <div class="layout">
+
+    <div class="canvas-panel">
+      <canvas id="cv" width="900" height="540" aria-label="RRT* simulation canvas"></canvas>
+      <p class="canvas-hint" id="canvasHint">Click anywhere to place an obstacle. Click an obstacle again to remove it.</p>
+    </div>
+
+    <div class="side">
+
+      <div class="panel">
+        <h2>Current phase</h2>
+        <p class="phase-name mono" id="phaseName">Sample</p>
+        <p class="phase-desc" id="phaseDesc">Press Step to draw a random point q_rand from free space.</p>
+      </div>
+
+      <div class="panel">
+        <h2>Controls</h2>
+        <div class="btn-row">
+          <button class="primary" id="btnStep">Step</button>
+          <button id="btnPlay">Play</button>
+          <button id="btnReset">Reset tree</button>
+        </div>
+        <div class="field"><label><input type="checkbox" id="chkGoalBias" checked> Goal bias (10%)</label></div>
+        <div class="field"><label>Speed</label><input type="range" id="rngSpeed" min="30" max="600" value="260"></div>
+        <div class="field"><label>Step size Δ</label><input type="range" id="rngStep" min="15" max="70" value="35"></div>
+      </div>
+
+      <div class="panel">
+        <h2>Canvas mode</h2>
+        <div class="btn-row">
+          <button class="active-mode" id="modeObstacle">Obstacles</button>
+          <button id="modeStart">Move start</button>
+          <button id="modeGoal">Move goal</button>
+          <button id="btnClearObs">Clear obstacles</button>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>Pseudocode</h2>
+        <div class="pseudocode mono" id="pseudocode">
+          <div data-line="sample">q_rand ← Sample()</div>
+          <div data-line="nearest">q_near ← Nearest(T, q_rand)</div>
+          <div data-line="steer">q_new ← Steer(q_near, q_rand, Δ)</div>
+          <div data-line="check">if CollisionFree(q_near, q_new):</div>
+          <div data-line="near">  Q_near ← Near(T, q_new, r_n)</div>
+          <div data-line="chooseParent">  q_parent ← argmin cost(q)+dist(q,q_new)</div>
+          <div data-line="add">  T.add(q_new, parent=q_parent)</div>
+          <div data-line="rewire">  rewire neighbors through q_new if cheaper</div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>Legend</h2>
+        <div class="legend">
+          <div class="legend-item"><span class="swatch" style="background:var(--node-fill)"></span>tree node</div>
+          <div class="legend-item"><span class="swatch" style="background:var(--accent-gold)"></span>goal / best path</div>
+          <div class="legend-item"><span class="swatch" style="background:var(--accent-amber)"></span>q_rand / q_new</div>
+          <div class="legend-item"><span class="swatch" style="background:var(--accent-cyan)"></span>tree edge</div>
+          <div class="legend-item"><span class="swatch" style="background:var(--accent-red)"></span>obstacle / rejected</div>
+          <div class="legend-item"><span class="swatch" style="background:var(--accent-violet)"></span>rewired edge</div>
+          <div class="legend-item"><span class="swatch ring" style="border-color:var(--text-secondary)"></span>Near() radius rₙ</div>
+        </div>
+        <p class="note">Unlike plain RRT, this doesn't stop at the first path — it keeps sampling, and every rewire can shave cost off the current best path. Watch "best path cost" tick down as it plays.</p>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  const cv = document.getElementById('cv');
+  const ctx = cv.getContext('2d');
+  const W = cv.width, H = cv.height;
+  function cssVar(name){ return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+
+  let start = {x:70, y:H-70};
+  let goal  = {x:W-70, y:70};
+  const GOAL_R = 16;
+  const ROBOT_MARGIN = 5;
+
+  let obstacles = [
+    {x:300,y:220,r:55},
+    {x:520,y:380,r:45},
+    {x:620,y:140,r:38},
+    {x:420,y:120,r:30}
+  ];
+
+  let nodes = []; // {x,y,parent,cost}
+  let iteration = 0;
+  let phase = 'sample';
+  let current = { rand:null, near:null, newPt:null, free:null, goalBiasUsed:false,
+                   nearIdxList:[], chosenParentIdx:null, rewiredIdx:[], radius:0 };
+  let bestGoalIdx = -1;
+  let playing = false;
+  let playTimer = null;
+  let mode = 'obstacle';
+
+  function resetTree(){
+    nodes = [{x:start.x, y:start.y, parent:-1, cost:0}];
+    iteration = 0;
+    phase = 'sample';
+    current = { rand:null, near:null, newPt:null, free:null, goalBiasUsed:false,
+                nearIdxList:[], chosenParentIdx:null, rewiredIdx:[], radius:0 };
+    bestGoalIdx = -1;
+    stopPlay();
+    updateStats(); updatePhaseUI(); render();
+  }
+
+  function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
+
+  function sampleFn(){
+    const bias = document.getElementById('chkGoalBias').checked;
+    if(bias && Math.random() < 0.10){ current.goalBiasUsed = true; return {x:goal.x, y:goal.y}; }
+    current.goalBiasUsed = false;
+    return { x: 20 + Math.random()*(W-40), y: 20 + Math.random()*(H-40) };
+  }
+
+  function nearestFn(pt){
+    let bi=0, bd=Infinity;
+    for(let i=0;i<nodes.length;i++){ const d = dist(nodes[i], pt); if(d<bd){bd=d; bi=i;} }
+    return bi;
+  }
+
+  function steerFn(nearIdx, rand){
+    const near = nodes[nearIdx];
+    const delta = parseFloat(document.getElementById('rngStep').value);
+    const d = dist(near, rand);
+    if(d <= delta) return {x:rand.x, y:rand.y};
+    const t = delta/d;
+    return { x: near.x + (rand.x-near.x)*t, y: near.y + (rand.y-near.y)*t };
+  }
+
+  function segCircleHit(a,b,c,r){
+    const dx=b.x-a.x, dy=b.y-a.y;
+    const len2 = dx*dx+dy*dy;
+    let t = len2===0 ? 0 : ((c.x-a.x)*dx + (c.y-a.y)*dy)/len2;
+    t = Math.max(0, Math.min(1,t));
+    const px = a.x + dx*t, py = a.y + dy*t;
+    return Math.hypot(px-c.x, py-c.y) < r;
+  }
+  function collisionFreeFn(a,b){
+    for(const o of obstacles){ if(segCircleHit(a,b,o,o.r+ROBOT_MARGIN)) return false; }
+    return true;
+  }
+
+  function neighborRadius(n){
+    if(n<=2) return 140;
+    const gamma = 420;
+    const r = gamma * Math.pow(Math.log(n)/n, 0.5);
+    return Math.max(40, Math.min(160, r));
+  }
+
+  function recomputeCosts(){
+    const children = Array.from({length:nodes.length}, () => []);
+    for(let i=1;i<nodes.length;i++){ children[nodes[i].parent].push(i); }
+    nodes[0].cost = 0;
+    const queue=[0];
+    while(queue.length){
+      const i = queue.shift();
+      for(const c of children[i]){
+        nodes[c].cost = nodes[i].cost + dist(nodes[i], nodes[c]);
+        queue.push(c);
+      }
+    }
+  }
+
+  function refreshBestGoal(){
+    let bi=-1, bc=Infinity;
+    for(let i=0;i<nodes.length;i++){
+      if(dist(nodes[i],goal) < GOAL_R+6 && nodes[i].cost < bc){ bc = nodes[i].cost; bi = i; }
+    }
+    bestGoalIdx = bi;
+  }
+
+  function extractPath(idx){
+    const p = []; let i = idx;
+    while(i !== -1){ p.push(nodes[i]); i = nodes[i].parent; }
+    return p.reverse();
+  }
+
+  // ---- phase state machine ----
+  function nextPhase(){
+    if(phase === 'sample'){
+      iteration++;
+      current.rand = sampleFn();
+      current.rewiredIdx = [];
+      phase = 'nearest';
+    } else if(phase === 'nearest'){
+      current.near = nearestFn(current.rand);
+      phase = 'steer';
+    } else if(phase === 'steer'){
+      current.newPt = steerFn(current.near, current.rand);
+      phase = 'check';
+    } else if(phase === 'check'){
+      current.free = collisionFreeFn(nodes[current.near], current.newPt);
+      phase = current.free ? 'near' : 'reject';
+    } else if(phase === 'near'){
+      const r = neighborRadius(nodes.length);
+      current.radius = r;
+      current.nearIdxList = [];
+      for(let i=0;i<nodes.length;i++){
+        if(i===current.near) continue;
+        if(dist(nodes[i], current.newPt) <= r) current.nearIdxList.push(i);
+      }
+      phase = 'chooseParent';
+    } else if(phase === 'chooseParent'){
+      let bestIdx = current.near;
+      let bestCost = nodes[current.near].cost + dist(nodes[current.near], current.newPt);
+      for(const i of current.nearIdxList){
+        if(!collisionFreeFn(nodes[i], current.newPt)) continue;
+        const c = nodes[i].cost + dist(nodes[i], current.newPt);
+        if(c < bestCost){ bestCost = c; bestIdx = i; }
+      }
+      current.chosenParentIdx = bestIdx;
+      current.chosenCost = bestCost;
+      phase = 'add';
+    } else if(phase === 'add'){
+      const newIdx = nodes.length;
+      nodes.push({x:current.newPt.x, y:current.newPt.y, parent: current.chosenParentIdx, cost: current.chosenCost});
+      phase = 'rewire';
+      current.newIdx = newIdx;
+    } else if(phase === 'rewire'){
+      const newIdx = current.newIdx;
+      const rewired = [];
+      for(const i of current.nearIdxList){
+        if(i === current.chosenParentIdx) continue;
+        if(!collisionFreeFn(nodes[newIdx], nodes[i])) continue;
+        const throughNew = nodes[newIdx].cost + dist(nodes[newIdx], nodes[i]);
+        if(throughNew < nodes[i].cost - 0.01){
+          nodes[i].parent = newIdx;
+          rewired.push(i);
+        }
+      }
+      current.rewiredIdx = rewired;
+      if(rewired.length) recomputeCosts();
+      refreshBestGoal();
+      current.rand=null; current.near=null; current.newPt=null;
+      phase = 'sample';
+    } else if(phase === 'reject'){
+      current.rand=null; current.near=null; current.newPt=null;
+      phase = 'sample';
+    }
+
+    updateStats(); updatePhaseUI(); render();
+  }
+
+  const phaseCopy = {
+    sample: () => current.goalBiasUsed
+      ? ['Sample (goal-biased)', 'This draw used the goal directly instead of a random point — nudging growth toward the target.']
+      : ['Sample', 'Drawing q_rand uniformly at random from free space.'],
+    nearest: () => ['Nearest', 'Finding the single closest node — this is only a starting candidate now, not the final parent.'],
+    steer: () => ['Steer', 'Stepping from q_near toward q_rand by Δ to get q_new.'],
+    check: () => ['Collision check', 'Testing the q_near → q_new edge for obstacles.'],
+    near: () => ['Near — radius search', `Finding every node within rₙ ≈ ${Math.round(current.radius)}px of q_new. This wider neighborhood is what RRT lacks.`],
+    chooseParent: () => ['Choose cheapest parent', 'Among q_near and every node in the radius, picking whichever gives q_new the lowest total cost — not just the geometrically nearest one.'],
+    add: () => ['Add to tree', 'q_new joins the tree under its cheapest valid parent, with cost = parent cost + edge length.'],
+    rewire: () => current.rewiredIdx.length
+      ? ['Rewire', `${current.rewiredIdx.length} neighbor(s) found a cheaper route through q_new and got re-parented — highlighted in violet.`]
+      : ['Rewire', 'Checked every neighbor in the radius — none were cheaper through q_new this time.'],
+    reject: () => ['Rejected', 'The edge hit an obstacle, so this sample is discarded.']
+  };
+
+  function updatePhaseUI(){
+    const [name, desc] = phaseCopy[phase]();
+    document.getElementById('phaseName').textContent = name;
+    document.getElementById('phaseDesc').textContent = desc;
+    document.querySelectorAll('.pseudocode div').forEach(el => el.classList.remove('active','reject','rewire'));
+    let lineKey = phase === 'reject' ? 'check' : phase;
+    const el = document.querySelector('.pseudocode div[data-line="'+lineKey+'"]');
+    if(el){
+      el.classList.add('active');
+      if(phase==='reject') el.classList.add('reject');
+      if(phase==='rewire') el.classList.add('rewire');
+    }
+  }
+
+  function updateStats(){
+    document.getElementById('statIter').textContent = iteration;
+    document.getElementById('statNodes').textContent = nodes.length;
+    const costEl = document.getElementById('statCost');
+    costEl.textContent = bestGoalIdx>=0 ? Math.round(nodes[bestGoalIdx].cost) + ' px' : '—';
+  }
+
+  function render(){
+    ctx.clearRect(0,0,W,H);
+    ctx.fillStyle = cssVar('--panel-bg'); ctx.fillRect(0,0,W,H);
+
+    ctx.strokeStyle = cssVar('--grid-line'); ctx.lineWidth = 1;
+    for(let x=0;x<=W;x+=36){ ctx.beginPath(); ctx.moveTo(x+0.5,0); ctx.lineTo(x+0.5,H); ctx.stroke(); }
+    for(let y=0;y<=H;y+=36){ ctx.beginPath(); ctx.moveTo(0,y+0.5); ctx.lineTo(W,y+0.5); ctx.stroke(); }
+
+    // obstacles
+    ctx.fillStyle = 'rgba(192,67,90,0.22)'; ctx.strokeStyle = cssVar('--accent-red'); ctx.lineWidth = 1.4;
+    for(const o of obstacles){ ctx.beginPath(); ctx.arc(o.x,o.y,o.r,0,Math.PI*2); ctx.fill(); ctx.stroke(); }
+
+    // tree edges
+    ctx.strokeStyle = cssVar('--accent-cyan'); ctx.lineWidth = 1.4;
+    for(const n of nodes){
+      if(n.parent === -1) continue;
+      const p = nodes[n.parent];
+      ctx.beginPath(); ctx.moveTo(p.x,p.y); ctx.lineTo(n.x,n.y); ctx.stroke();
+    }
+
+    // best path
+    if(bestGoalIdx >= 0){
+      const path = extractPath(bestGoalIdx);
+      ctx.strokeStyle = cssVar('--accent-gold'); ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.moveTo(path[0].x, path[0].y);
+      for(let i=1;i<path.length;i++) ctx.lineTo(path[i].x, path[i].y);
+      ctx.stroke();
+    }
+
+    // rewired edges highlight
+    if(current.rewiredIdx && current.rewiredIdx.length && phase==='rewire'){
+      ctx.strokeStyle = cssVar('--accent-violet'); ctx.lineWidth = 2.6;
+      for(const i of current.rewiredIdx){
+        const n = nodes[i], p = nodes[n.parent];
+        ctx.beginPath(); ctx.moveTo(p.x,p.y); ctx.lineTo(n.x,n.y); ctx.stroke();
+      }
+    }
+
+    // nodes
+    ctx.fillStyle = cssVar('--node-fill');
+    for(const n of nodes){ ctx.beginPath(); ctx.arc(n.x,n.y,2.4,0,Math.PI*2); ctx.fill(); }
+
+    // goal
+    ctx.strokeStyle = cssVar('--accent-gold'); ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(goal.x, goal.y, GOAL_R, 0, Math.PI*2); ctx.stroke();
+    ctx.beginPath(); ctx.arc(goal.x, goal.y, 3, 0, Math.PI*2); ctx.fillStyle = cssVar('--accent-gold'); ctx.fill();
+
+    // start
+    ctx.beginPath(); ctx.arc(start.x, start.y, 5, 0, Math.PI*2); ctx.fillStyle = cssVar('--node-fill'); ctx.fill();
+
+    // near-radius circle
+    if(current.newPt && ['near','chooseParent','add','rewire'].includes(phase)){
+      ctx.strokeStyle = cssVar('--text-secondary'); ctx.setLineDash([3,3]); ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.arc(current.newPt.x, current.newPt.y, current.radius, 0, Math.PI*2); ctx.stroke();
+      ctx.setLineDash([]);
+      // highlight near-neighbors
+      ctx.strokeStyle = cssVar('--accent-cyan'); ctx.lineWidth = 1.6;
+      for(const i of current.nearIdxList){
+        ctx.beginPath(); ctx.arc(nodes[i].x, nodes[i].y, 5, 0, Math.PI*2); ctx.stroke();
+      }
+    }
+
+    // chosen parent highlight
+    if(current.chosenParentIdx !== null && current.chosenParentIdx !== undefined && ['add','rewire'].includes(phase)){
+      const p = nodes[current.chosenParentIdx];
+      ctx.strokeStyle = cssVar('--accent-amber'); ctx.lineWidth = 2.4;
+      ctx.beginPath(); ctx.arc(p.x,p.y,8,0,Math.PI*2); ctx.stroke();
+    } else if(current.near !== null && ['steer','check','near','chooseParent'].includes(phase)){
+      const nn = nodes[current.near];
+      ctx.strokeStyle = cssVar('--accent-cyan'); ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(nn.x,nn.y,7,0,Math.PI*2); ctx.stroke();
+    }
+
+    if(current.rand && ['nearest','steer'].includes(phase)) drawCross(current.rand, cssVar('--accent-amber'));
+
+    if(current.newPt){
+      if(phase==='check'){
+        ctx.strokeStyle = cssVar('--accent-amber'); ctx.setLineDash([4,3]); ctx.lineWidth = 1.6;
+        ctx.beginPath(); ctx.moveTo(nodes[current.near].x, nodes[current.near].y); ctx.lineTo(current.newPt.x, current.newPt.y); ctx.stroke();
+        ctx.setLineDash([]);
+      }
+      if(phase==='reject'){
+        ctx.strokeStyle = cssVar('--accent-red'); ctx.lineWidth = 2.4;
+        ctx.beginPath(); ctx.moveTo(nodes[current.near].x, nodes[current.near].y); ctx.lineTo(current.newPt.x, current.newPt.y); ctx.stroke();
+      }
+      ctx.beginPath(); ctx.arc(current.newPt.x, current.newPt.y, 4, 0, Math.PI*2);
+      ctx.fillStyle = phase==='reject' ? cssVar('--accent-red') : cssVar('--accent-amber');
+      ctx.fill();
+    }
+  }
+
+  function drawCross(pt, color){
+    ctx.strokeStyle = color; ctx.lineWidth = 1.6;
+    ctx.beginPath(); ctx.moveTo(pt.x-8,pt.y); ctx.lineTo(pt.x+8,pt.y); ctx.moveTo(pt.x,pt.y-8); ctx.lineTo(pt.x,pt.y+8); ctx.stroke();
+    ctx.beginPath(); ctx.arc(pt.x,pt.y,3,0,Math.PI*2); ctx.fillStyle = color; ctx.fill();
+  }
+
+  function stopPlay(){ playing=false; if(playTimer){ clearTimeout(playTimer); playTimer=null; } document.getElementById('btnPlay').textContent='Play'; }
+  function startPlay(){
+    playing = true; document.getElementById('btnPlay').textContent='Pause';
+    const speed = () => parseInt(document.getElementById('rngSpeed').value,10);
+    function tick(){
+      if(!playing) return;
+      nextPhase();
+      if(nodes.length >= 500){ stopPlay(); return; }
+      if(playing) playTimer = setTimeout(tick, 700 - speed());
+    }
+    tick();
+  }
+
+  function toCanvasCoords(evt){
+    const rect = cv.getBoundingClientRect();
+    const clientX = evt.touches ? evt.touches[0].clientX : evt.clientX;
+    const clientY = evt.touches ? evt.touches[0].clientY : evt.clientY;
+    const scaleX = W/rect.width, scaleY = H/rect.height;
+    return { x:(clientX-rect.left)*scaleX, y:(clientY-rect.top)*scaleY };
+  }
+
+  cv.addEventListener('pointerdown', (e) => {
+    const pt = toCanvasCoords(e);
+    if(mode === 'obstacle'){
+      const hitIdx = obstacles.findIndex(o => dist(o,pt) < o.r);
+      if(hitIdx >= 0) obstacles.splice(hitIdx,1);
+      else obstacles.push({x:pt.x, y:pt.y, r: 22 + Math.random()*16});
+      render();
+    } else if(mode === 'start'){
+      start = {x:pt.x, y:pt.y}; resetTree();
+    } else if(mode === 'goal'){
+      goal = {x:pt.x, y:pt.y}; refreshBestGoal(); updateStats(); render();
+    }
+  });
+
+  document.getElementById('btnStep').addEventListener('click', () => { stopPlay(); nextPhase(); });
+  document.getElementById('btnPlay').addEventListener('click', () => { playing ? stopPlay() : startPlay(); });
+  document.getElementById('btnReset').addEventListener('click', resetTree);
+  document.getElementById('btnClearObs').addEventListener('click', () => { obstacles = []; render(); });
+  document.getElementById('rngStep').addEventListener('input', render);
+
+  function setMode(m){
+    mode = m;
+    document.getElementById('modeObstacle').classList.toggle('active-mode', m==='obstacle');
+    document.getElementById('modeStart').classList.toggle('active-mode', m==='start');
+    document.getElementById('modeGoal').classList.toggle('active-mode', m==='goal');
+    const hints = {
+      obstacle: 'Click anywhere to place an obstacle. Click an obstacle again to remove it.',
+      start: 'Click anywhere to move the start node (this resets the tree).',
+      goal: 'Click anywhere to move the goal.'
+    };
+    document.getElementById('canvasHint').textContent = hints[m];
+  }
+  document.getElementById('modeObstacle').addEventListener('click', () => setMode('obstacle'));
+  document.getElementById('modeStart').addEventListener('click', () => setMode('start'));
+  document.getElementById('modeGoal').addEventListener('click', () => setMode('goal'));
+
+  resetTree();
+})();
+</script>
+</body>
+</html>
